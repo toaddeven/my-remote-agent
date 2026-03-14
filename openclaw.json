@@ -1,0 +1,26 @@
+{
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 18789
+  },
+  "feishu": {
+    "appId": "",
+    "appSecret": "",
+    "verificationToken": "",
+    "encryptKey": ""
+  },
+  "agents": {
+    "default": {
+      "model": "anthropic/claude-opus-4-6",
+      "workspace": "./workspace",
+      "systemPrompt": "你是一个有用的 AI 助手。"
+    }
+  },
+  "tools": {
+    "android": {
+      "enabled": false,
+      "adbHost": "192.168.1.172",
+      "adbPort": 5555
+    }
+  }
+}

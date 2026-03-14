@@ -1,0 +1,41 @@
+{
+  "feishu": {
+    "appId": "${FEISHU_APP_ID}",
+    "appSecret": "${FEISHU_APP_SECRET}",
+    "domain": "feishu",
+    "botName": "MyAgent"
+  },
+  "model": {
+    "backend": "cli",
+    "default": "anthropic/claude-opus-4-6",
+    "cli": {
+      "path": "claude",
+      "timeout": 120000
+    }
+  },
+  "agents": [
+    {
+      "id": "main",
+      "model": "anthropic/claude-opus-4-6",
+      "workspace": "./workspace"
+    }
+  ],
+  "bindings": [
+    {
+      "agentId": "main",
+      "match": { "channel": "feishu", "peer": { "kind": "direct" } }
+    },
+    {
+      "agentId": "main",
+      "match": { "channel": "feishu", "peer": { "kind": "group" } }
+    }
+  ],
+  "session": {
+    "dmScope": "per-peer",
+    "reset": { "kind": "manual" },
+    "maxContextMessages": 50
+  },
+  "messages": {
+    "queue": { "mode": "followup", "debounceMs": 800 }
+  }
+}
