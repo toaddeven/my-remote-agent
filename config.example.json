@@ -1,0 +1,58 @@
+// Work Agent 配置文件示例
+// 复制此文件为 config.json 并填入真实配置
+
+{
+  "session": {
+    "storagePath": "./data/sessions",
+    "maxHistory": 100,
+    "ttl": 86400000
+  },
+  "memory": {
+    "storagePath": "./data/memory",
+    "shortTermLimit": 50,
+    "longTermThreshold": 1800000
+  },
+  "cron": {
+    "enabled": true,
+    "jobs": [
+      {
+        "id": "daily_cleanup",
+        "name": "每日清理",
+        "schedule": "0 0 * * *",
+        "handler": "cleanup",
+        "enabled": true
+      }
+    ]
+  },
+  "heartbeat": {
+    "enabled": true,
+    "intervalMs": 1800000,
+    "handlers": ["checkHealth"]
+  },
+  "llm": {
+    "provider": "minimax",
+    "apiKey": "your-api-key-here",
+    "baseUrl": "https://api.minimax.chat/v1",
+    "model": "abab6.5s-chat",
+    "maxTokens": 4096,
+    "temperature": 0.7,
+    "proxy": "http://127.0.0.1:7890"
+  },
+  "llm_claude_cli_example": {
+    "provider": "claude-cli",
+    "apiKey": "",
+    "model": "claude-cli",
+    "cliPath": "claude",
+    "cliTimeout": 120000,
+    "cliIdleTTL": 1800000,
+    "cliMaxProcesses": 10,
+    "cliFlags": []
+  },
+  "feishu": {
+    "appId": "your-app-id",
+    "appSecret": "your-app-secret",
+    "verificationToken": "your-verification-token",
+    "encryptKey": "your-encrypt-key"
+  },
+  "proxy": "http://127.0.0.1:7890"
+}
