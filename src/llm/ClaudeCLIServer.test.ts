@@ -294,6 +294,31 @@ describe('ClaudeCLIServer', () => {
     });
   });
 
+  describe('hasSession', () => {
+    it('应该在有 session 时返回 true', async () => {
+      const resp = makeResult('OK', 'session-1');
+      mockSpawn.mockReturnValueOnce(createMockProcess(resp));
+
+      server = new ClaudeCLIServer();
+      await server.sendMessage('channel-1', 'msg');
+
+      expect(server.hasSession('channel-1')).toBe(true);
+      expect(server.hasSession('channel-2')).toBe(false);
+    });
+  });
+
+  describe('session 持久化', () => {
+    it('无 persistPath 时不报错', async () => {
+      const resp = makeResult('OK', 'session-1');
+      mockSpawn.mockReturnValueOnce(createMockProcess(resp));
+
+      server = new ClaudeCLIServer();
+      await server.sendMessage('channel-1', 'msg');
+      // 无 persistPath，saveSessionMap 应该是 no-op
+      expect(server.hasSession('channel-1')).toBe(true);
+    });
+  });
+
   describe('getStats', () => {
     it('应该返回正确的状态', async () => {
       const resp = makeResult('OK', 'session-abc');

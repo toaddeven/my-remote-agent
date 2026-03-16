@@ -11,6 +11,9 @@ import { Autostart } from './autostart/Autostart.js';
 import { SubAgentManager } from './subagent/index.js';
 import { Sandbox, createDefaultSandboxConfig } from './sandbox/index.js';
 import { TaskQueue, createDefaultQueueOptions, Priority } from './queue/index.js';
+import { ConversationLogger } from './memory/ConversationLogger.js';
+import { GroupContextBuilder } from './memory/GroupContextBuilder.js';
+import { QMDStore } from './memory/QMDStore.js';
 import { logger, readJsonFile } from './utils/index.js';
 
 // 导出优先级常量供外部使用
@@ -30,7 +33,10 @@ export class WorkAgent {
   private subAgentManager: SubAgentManager;
   private sandbox: Sandbox;
   private taskQueue: TaskQueue;
-  
+  private conversationLogger?: ConversationLogger;
+  private groupContextBuilder?: GroupContextBuilder;
+  private qmdStore?: QMDStore;
+
   private initialized: boolean = false;
 
   constructor(config: Config) {
@@ -76,6 +82,31 @@ export class WorkAgent {
     queueOptions.maxConcurrent = config.queue?.maxConcurrent || 3;
     queueOptions.maxQueueSize = config.queue?.maxQueueSize || 0;
     this.taskQueue = new TaskQueue(queueOptions);
+
+    // 初始化 QMD 语义检索
+    if (config.qmd?.enabled) {
+      this.qmdStore = new QMDStore(config.qmd);
+    }
+
+    // 初始化会话上下文构建器（群聊 + 私聊）
+    if (config.groupContext?.enabled) {
+      this.groupContextBuilder = new GroupContextBuilder(
+        this.memory,
+        this.llmClient,
+        config.groupContext,
+        this.qmdStore,
+      );
+    }
+
+    // 初始化会话日志（飞书对话持久化）
+    if (config.memorySync?.enabled) {
+      this.conversationLogger = new ConversationLogger(
+        this.memory,
+        config.memorySync.dailyLogDir || `${process.env.HOME}/.openclaw/workspace/_daily`,
+        this.llmClient,
+        config.memorySync.useLLMSummary || false,
+      );
+    }
   }
 
   // 初始化
@@ -86,6 +117,13 @@ export class WorkAgent {
 
     // 初始化内存
     await this.memory.init();
+    logger.info(`[冷启动] Memory 已加载 ${this.memory.getLongTermCount()} 条长期记忆`);
+
+    // 初始化 QMD
+    if (this.qmdStore) {
+      await this.qmdStore.init();
+      logger.info('[冷启动] QMD 索引已就绪');
+    }
 
     // 启动定时任务
     if (this.config.cron.enabled) {
@@ -220,10 +258,45 @@ export class WorkAgent {
       }
     };
 
+    // 存储用户消息到长期记忆
+    const userTs = Date.now();
+    if (this.conversationLogger) {
+      await this.memory.storeLongTerm(`conv:${chatId}:${userTs}:user`, {
+        content: claudeMessage,
+        attachments: message.attachments?.map(a => a.name).join(', ') || undefined,
+        channelId: chatId,
+      });
+      logger.info(`[持久化] conv 消息已存储 (channel=${chatId}, role=user, key=conv:${chatId}:${userTs}:user)`);
+    }
+
+    // 异步索引到 QMD（fire-and-forget）
+    if (this.qmdStore) {
+      this.qmdStore.indexMessage({ channelId: chatId, content: claudeMessage, role: 'user', timestamp: userTs })
+        .catch(err => logger.error('QMD 索引失败', err));
+    }
+
+    // 构建会话上下文（群聊 + 私聊均注入历史消息）
+    let contextPrefix = '';
+    if (this.groupContextBuilder) {
+      try {
+        contextPrefix = await this.groupContextBuilder.buildContext(chatId, claudeMessage);
+      } catch (err) {
+        logger.error('构建会话上下文失败', err);
+      }
+    }
+
+    if (contextPrefix) {
+      logger.info(`[上下文注入] chatType=${message.chatType}, channel=${chatId}, 注入长度=${contextPrefix.length}字符`);
+    } else {
+      logger.debug(`[上下文注入] chatType=${message.chatType}, channel=${chatId}, 无历史上下文`);
+    }
+
+    const finalMessage = contextPrefix ? `${contextPrefix}${claudeMessage}` : claudeMessage;
+
     let response: string;
     try {
       const llmResponse = await this.llmClient.chat({
-        messages: [{ id: '', role: 'user', content: claudeMessage, timestamp: Date.now() }],
+        messages: [{ id: '', role: 'user', content: finalMessage, timestamp: Date.now() }],
         channelId: chatId,
         onEvent,
       });
@@ -232,6 +305,22 @@ export class WorkAgent {
     } catch (error) {
       logger.error('Claude CLI 请求失败', error);
       response = '抱歉，Claude 暂时无法处理你的请求。';
+    }
+
+    // 存储助手回复到长期记忆
+    const assistantTs = Date.now();
+    if (this.conversationLogger) {
+      await this.memory.storeLongTerm(`conv:${chatId}:${assistantTs}:assistant`, {
+        content: response,
+        channelId: chatId,
+      });
+      logger.info(`[持久化] conv 消息已存储 (channel=${chatId}, role=assistant)`);
+    }
+
+    // 异步索引助手回复到 QMD
+    if (this.qmdStore) {
+      this.qmdStore.indexMessage({ channelId: chatId, content: response, role: 'assistant', timestamp: assistantTs })
+        .catch(err => logger.error('QMD 索引失败', err));
     }
 
     // 最终回复
@@ -303,6 +392,11 @@ export class WorkAgent {
     return this.taskQueue;
   }
 
+  // 获取会话日志器
+  getConversationLogger(): ConversationLogger | undefined {
+    return this.conversationLogger;
+  }
+
   // 获取状态
   getStatus(): object {
     const queueStats = this.taskQueue.getStats();
@@ -346,6 +440,11 @@ export class WorkAgent {
 
     // 清理 LLM 客户端资源（claude-cli 进程池等）
     this.llmClient.destroy();
+
+    // 关闭 QMD
+    if (this.qmdStore) {
+      await this.qmdStore.close();
+    }
 
     // 清理新模块
     this.taskQueue.destroy();
@@ -412,6 +511,27 @@ export function createDefaultConfig(): Config {
       maxConcurrent: 3,
       maxQueueSize: 0,
       defaultTimeout: 60000,
+    },
+    groupContext: {
+      enabled: false,
+      recentWindowMinutes: 30,
+      recentMaxMessages: 20,
+      searchOlderMessages: true,
+      searchTopK: 5,
+      compressOlderMessages: false,
+      compressThresholdMessages: 50,
+    },
+    memorySync: {
+      enabled: false,
+      dailyLogDir: (process.env.HOME || '/root') + '/.openclaw/workspace/_daily',
+      cronSchedule: '0 23 * * *',
+      useLLMSummary: false,
+    },
+    qmd: {
+      enabled: false,
+      dbPath: './data/qmd',
+      collectionName: 'work-agent-conv',
+      minScore: 0.25,
     },
   };
 }

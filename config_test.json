@@ -1,0 +1,54 @@
+{
+  "session": {
+    "storagePath": "./data/sessions",
+    "maxHistory": 100,
+    "ttl": 86400000
+  },
+  "memory": {
+    "storagePath": "./data/memory",
+    "shortTermLimit": 50,
+    "longTermThreshold": 1800000
+  },
+  "cron": {
+    "enabled": false,
+    "jobs": []
+  },
+  "heartbeat": {
+    "enabled": false,
+    "intervalMs": 1800000,
+    "handlers": []
+  },
+  "llm": {
+    "provider": "claude-cli",
+    "apiKey": "",
+    "model": "claude-cli",
+    "cliPath": "claude",
+    "cliTimeout": 120000,
+    "cliFlags": ["--strict-mcp-config"]
+  },
+  "groupContext": {
+    "enabled": true,
+    "recentWindowMinutes": 30,
+    "recentMaxMessages": 20,
+    "searchOlderMessages": true,
+    "searchTopK": 5,
+    "compressOlderMessages": false,
+    "compressThresholdMessages": 50
+  },
+  "memorySync": {
+    "enabled": true,
+    "dailyLogDir": "~/.openclaw/workspace/_daily",
+    "cronSchedule": "0 23 * * *",
+    "useLLMSummary": false
+  },
+  "qmd": {
+    "enabled": true,
+    "dbPath": "./data/qmd",
+    "collectionName": "work-agent-conv",
+    "minScore": 0.25
+  },
+  "feishu": {
+    "appId": "cli_a9249ab903f8dcc2",
+    "appSecret": "Bkwkz1gbJsa853cOBjnvGgdTZZzft6NP"
+  }
+}

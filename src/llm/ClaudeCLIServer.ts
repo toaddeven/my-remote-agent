@@ -61,13 +61,20 @@ export class ClaudeCLIServer {
   private cliPath: string;
   private cliFlags: string[];
   private responseTimeout: number;
+  private persistPath?: string;
 
-  constructor(config: CLIServerConfig = {}) {
+  constructor(config: CLIServerConfig & { persistPath?: string } = {}) {
     this.cliPath = config.cliPath || 'claude';
     this.cliFlags = config.cliFlags || [];
     this.responseTimeout = config.responseTimeout || 120000;
+    this.persistPath = config.persistPath;
 
-    logger.info(`ClaudeCLIServer 启动 (path=${this.cliPath}, timeout=${this.responseTimeout}ms)`);
+    // 同步加载已有 session 映射
+    if (this.persistPath) {
+      this.loadSessionMapSync();
+    }
+
+    logger.info(`ClaudeCLIServer 启动 (path=${this.cliPath}, timeout=${this.responseTimeout}ms, restored=${this.sessionMap.size} sessions)`);
   }
 
   // 发送消息，支持中间事件回调
@@ -78,6 +85,7 @@ export class ClaudeCLIServer {
       const result = await this.spawnAndSend(message, sessionId, onEvent);
       if (result.sessionId) {
         this.sessionMap.set(channelId, result.sessionId);
+        this.saveSessionMap().catch(() => {});
       }
       return result;
     } catch (err) {
@@ -88,6 +96,7 @@ export class ClaudeCLIServer {
         const result = await this.spawnAndSend(message, undefined, onEvent);
         if (result.sessionId) {
           this.sessionMap.set(channelId, result.sessionId);
+          this.saveSessionMap().catch(() => {});
         }
         return result;
       }
@@ -261,6 +270,46 @@ export class ClaudeCLIServer {
         });
         break;
     }
+  }
+
+  // 保存 session 映射到磁盘
+  private async saveSessionMap(): Promise<void> {
+    if (!this.persistPath) return;
+    try {
+      const fs = await import('fs/promises');
+      await fs.mkdir(this.persistPath, { recursive: true });
+      const filePath = `${this.persistPath}/cli-sessions.json`;
+      const data: Record<string, string> = {};
+      for (const [k, v] of this.sessionMap.entries()) {
+        data[k] = v;
+      }
+      await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
+    } catch (err) {
+      logger.error('[ClaudeCLI] session 映射保存失败', err);
+    }
+  }
+
+  // 同步加载 session 映射（构造函数中调用）
+  private loadSessionMapSync(): void {
+    if (!this.persistPath) return;
+    try {
+      const fs = require('fs');
+      const filePath = `${this.persistPath}/cli-sessions.json`;
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const data = JSON.parse(content);
+      for (const [k, v] of Object.entries(data)) {
+        if (typeof v === 'string') {
+          this.sessionMap.set(k, v);
+        }
+      }
+    } catch {
+      // 文件不存在，忽略
+    }
+  }
+
+  // 查询是否有活跃 session
+  hasSession(channelId: string): boolean {
+    return this.sessionMap.has(channelId);
   }
 
   clearSession(channelId: string) {
