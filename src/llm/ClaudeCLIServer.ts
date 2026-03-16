@@ -36,6 +36,13 @@ export interface CLIEvent {
 // 事件回调
 export type CLIEventCallback = (event: CLIEvent) => void;
 
+// 每次调用的可选覆盖参数（由 SlashCommandRouter 管理状态，WorkAgent 透传）
+export interface SendOptions {
+  model?: string;
+  cwd?: string;
+  permissionMode?: string;
+}
+
 // CLI Server 配置
 export interface CLIServerConfig {
   cliPath?: string;
@@ -77,12 +84,12 @@ export class ClaudeCLIServer {
     logger.info(`ClaudeCLIServer 启动 (path=${this.cliPath}, timeout=${this.responseTimeout}ms, restored=${this.sessionMap.size} sessions)`);
   }
 
-  // 发送消息，支持中间事件回调
-  async sendMessage(channelId: string, message: string, onEvent?: CLIEventCallback): Promise<CLIResult> {
+  // 发送消息，支持中间事件回调和每次调用的覆盖参数
+  async sendMessage(channelId: string, message: string, onEvent?: CLIEventCallback, options?: SendOptions): Promise<CLIResult> {
     const sessionId = this.sessionMap.get(channelId);
 
     try {
-      const result = await this.spawnAndSend(message, sessionId, onEvent);
+      const result = await this.spawnAndSend(message, sessionId, onEvent, options);
       if (result.sessionId) {
         this.sessionMap.set(channelId, result.sessionId);
         this.saveSessionMap().catch(() => {});
@@ -93,7 +100,7 @@ export class ClaudeCLIServer {
       if (sessionId && err instanceof ClaudeCLIError) {
         logger.warn(`Claude CLI --resume 失败，清除 session 重试 (channel=${channelId})`);
         this.sessionMap.delete(channelId);
-        const result = await this.spawnAndSend(message, undefined, onEvent);
+        const result = await this.spawnAndSend(message, undefined, onEvent, options);
         if (result.sessionId) {
           this.sessionMap.set(channelId, result.sessionId);
           this.saveSessionMap().catch(() => {});
@@ -105,7 +112,7 @@ export class ClaudeCLIServer {
   }
 
   // spawn claude --print --output-format stream-json --verbose
-  private spawnAndSend(message: string, sessionId?: string, onEvent?: CLIEventCallback): Promise<CLIResult> {
+  private spawnAndSend(message: string, sessionId?: string, onEvent?: CLIEventCallback, options?: SendOptions): Promise<CLIResult> {
     return new Promise((resolve, reject) => {
       const args = [
         '--print',
@@ -118,12 +125,25 @@ export class ClaudeCLIServer {
         args.push('--resume', sessionId);
       }
 
-      logger.info(`spawn claude (session=${sessionId || 'new'}, msg=${message.substring(0, 50)}...)`);
+      // 按需添加覆盖参数
+      if (options?.model) {
+        args.push('--model', options.model);
+      }
+      if (options?.permissionMode) {
+        args.push('--permission-mode', options.permissionMode);
+      }
 
-      const proc = spawn(this.cliPath, args, {
+      logger.info(`spawn claude (session=${sessionId || 'new'}, model=${options?.model || 'default'}, msg=${message.substring(0, 50)}...)`);
+
+      const spawnOpts: any = {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env },
-      });
+      };
+      if (options?.cwd) {
+        spawnOpts.cwd = options.cwd;
+      }
+
+      const proc = spawn(this.cliPath, args, spawnOpts);
 
       let stderr = '';
       let killed = false;
@@ -314,6 +334,13 @@ export class ClaudeCLIServer {
 
   clearSession(channelId: string) {
     this.sessionMap.delete(channelId);
+    this.saveSessionMap().catch(() => {});
+  }
+
+  // 设置指定 channel 的 sessionId（用于 /resume 斜杠命令）
+  setSession(channelId: string, sessionId: string) {
+    this.sessionMap.set(channelId, sessionId);
+    this.saveSessionMap().catch(() => {});
   }
 
   getStats() {

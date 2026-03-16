@@ -2,7 +2,7 @@
 // LLM 客户端 - Claude/OpenAI/MiniMax/Claude-CLI
 import { LLMConfig, Message } from '../types/index.js';
 import { logger } from '../utils/index.js';
-import { ClaudeCLIServer, CLIEventCallback } from './ClaudeCLIServer.js';
+import { ClaudeCLIServer, CLIEventCallback, SendOptions } from './ClaudeCLIServer.js';
 
 export interface LLMResponse {
   content: string;
@@ -22,6 +22,7 @@ export interface ChatOptions {
   systemPrompt?: string;
   channelId?: string;  // 用于 claude-cli provider 的会话管理
   onEvent?: CLIEventCallback; // claude-cli 中间事件回调
+  sendOptions?: SendOptions;  // claude-cli per-channel 覆盖参数（model/cwd/mode）
 }
 
 export class LLMClient {
@@ -246,7 +247,7 @@ export class LLMClient {
     }
 
     const channelId = options.channelId || 'default';
-    const result = await this.claudeCLIServer.sendMessage(channelId, message, options.onEvent);
+    const result = await this.claudeCLIServer.sendMessage(channelId, message, options.onEvent, options.sendOptions);
 
     return {
       content: result.content,
@@ -268,6 +269,11 @@ export class LLMClient {
   // 获取当前配置
   getConfig(): LLMConfig {
     return { ...this.config };
+  }
+
+  // 获取 ClaudeCLIServer 实例（用于斜杠命令路由器）
+  getClaudeCLIServer(): ClaudeCLIServer | undefined {
+    return this.claudeCLIServer;
   }
 
   // 销毁资源（claude-cli 进程池等）

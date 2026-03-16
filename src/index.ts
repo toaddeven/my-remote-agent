@@ -14,6 +14,7 @@ import { TaskQueue, createDefaultQueueOptions, Priority } from './queue/index.js
 import { ConversationLogger } from './memory/ConversationLogger.js';
 import { GroupContextBuilder } from './memory/GroupContextBuilder.js';
 import { QMDStore } from './memory/QMDStore.js';
+import { SlashCommandRouter } from './commands/index.js';
 import { logger, readJsonFile } from './utils/index.js';
 
 // 导出优先级常量供外部使用
@@ -36,6 +37,7 @@ export class WorkAgent {
   private conversationLogger?: ConversationLogger;
   private groupContextBuilder?: GroupContextBuilder;
   private qmdStore?: QMDStore;
+  private commandRouter?: SlashCommandRouter;
 
   private initialized: boolean = false;
 
@@ -106,6 +108,11 @@ export class WorkAgent {
         this.llmClient,
         config.memorySync.useLLMSummary || false,
       );
+    }
+
+    // 初始化斜杠命令路由器（仅 claude-cli 模式）
+    if (config.llm.provider === 'claude-cli') {
+      this.commandRouter = new SlashCommandRouter();
     }
   }
 
@@ -208,6 +215,30 @@ export class WorkAgent {
   private async handleFeishuMessageCLI(message: FeishuMessage): Promise<string | null> {
     const chatId = message.chatId;
 
+    // 立即回复确认收到
+    await this.feishuClient.replyMessage(message.messageId, '⏳ 收到，思考中...').catch(err => {
+      logger.error('发送确认消息失败', err);
+    });
+
+    // 斜杠命令拦截
+    if (this.commandRouter) {
+      const parsed = this.commandRouter.parse(message.content);
+      if (parsed) {
+        const result = await this.commandRouter.execute(parsed, chatId);
+        if (result.handled) {
+          // 内置命令：/new 时同步清除 ClaudeCLIServer 的 session
+          if (parsed.command === 'new' || parsed.command === 'clear') {
+            this.llmClient.getClaudeCLIServer()?.clearSession(chatId);
+          }
+          if (result.response) {
+            await this.feishuClient.replyMessage(message.messageId, result.response);
+          }
+          return result.response || null;
+        }
+        // 非内置命令（如 /commit）：原始消息透传给 Claude CLI
+      }
+    }
+
     // 构建发给 Claude 的消息（包含文件路径）
     let claudeMessage = message.content;
     if (message.attachments && message.attachments.length > 0) {
@@ -219,7 +250,15 @@ export class WorkAgent {
         });
 
       if (fileDescriptions.length > 0) {
-        claudeMessage = `${claudeMessage || '用户发送了以下文件，请分析：'}\n\n附件:\n${fileDescriptions.join('\n')}`;
+        // 纯图片消息：明确提示 Claude 读取并分析图片
+        const isImageOnly = message.messageType === 'image'
+          && (!message.content || message.content === '[图片]');
+        const defaultPrompt = isImageOnly
+          ? '用户发送了一张图片，请读取该图片文件并详细分析图片内容。'
+          : '用户发送了以下文件，请分析：';
+        claudeMessage = isImageOnly
+          ? `${defaultPrompt}\n\n附件:\n${fileDescriptions.join('\n')}`
+          : `${claudeMessage || defaultPrompt}\n\n附件:\n${fileDescriptions.join('\n')}`;
       }
     }
 
@@ -293,14 +332,33 @@ export class WorkAgent {
 
     const finalMessage = contextPrefix ? `${contextPrefix}${claudeMessage}` : claudeMessage;
 
+    // 读取 per-channel 状态（model/cwd/mode）
+    const channelState = this.commandRouter?.getChannelState(chatId);
+
     let response: string;
     try {
       const llmResponse = await this.llmClient.chat({
         messages: [{ id: '', role: 'user', content: finalMessage, timestamp: Date.now() }],
         channelId: chatId,
         onEvent,
+        sendOptions: channelState ? {
+          model: channelState.model,
+          cwd: channelState.cwd,
+          permissionMode: channelState.permissionMode,
+        } : undefined,
       });
       response = llmResponse.content;
+
+      // 同步 sessionId 回 commandRouter
+      const cliServer = this.llmClient.getClaudeCLIServer();
+      if (cliServer && this.commandRouter) {
+        const sessions = cliServer.getStats().sessions;
+        const current = sessions.find(s => s.channelId === chatId);
+        if (current) {
+          this.commandRouter.setSessionId(chatId, current.sessionId);
+        }
+      }
+
       logger.info(`Claude CLI 响应 (channel=${chatId}, len=${response.length})`);
     } catch (error) {
       logger.error('Claude CLI 请求失败', error);
