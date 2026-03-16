@@ -36,7 +36,10 @@ npx vitest run src/session/SessionManager.test.ts --config vitest.unit.config.ts
 | Module | Path | Purpose |
 |--------|------|---------|
 | SessionManager | `src/session/` | Per-channel conversation sessions with message history, TTL, cleanup |
-| Memory | `src/memory/` | Short-term / long-term / working memory with optional vector search (LanceDB) |
+| Memory | `src/memory/` | Short-term / long-term / working memory with `getByPrefix()` for conv record queries |
+| QMDStore | `src/memory/QMDStore.ts` | QMD SDK (`@tobilu/qmd`) wrapper — hybrid retrieval (BM25 + vector + LLM reranker) |
+| GroupContextBuilder | `src/memory/GroupContextBuilder.ts` | Builds conversation context for both group and private chats |
+| ConversationLogger | `src/memory/ConversationLogger.ts` | Daily conversation log generation and Feishu chat persistence |
 | LLMClient | `src/llm/` | Multi-provider LLM client (OpenAI, Anthropic, MiniMax, Ollama) with proxy support |
 | FeishuClient | `src/feishu/` | Feishu/Lark SDK wrapper — long-polling connection, send/reply messages |
 | CronScheduler | `src/cron/` | Cron-based scheduled jobs with named handler registry |
@@ -46,9 +49,37 @@ npx vitest run src/session/SessionManager.test.ts --config vitest.unit.config.ts
 | TaskQueue | `src/queue/` | Priority task queue with concurrency control |
 | Autostart | `src/autostart/` | OS-level auto-start registration (macOS launchd / Linux systemd) |
 
-**Message flow:** Feishu message → `WorkAgent.handleFeishuMessage()` → SessionManager (get/create session, add message) → Memory (store short-term) → build context from history + memory → LLMClient.chat() → reply via FeishuClient.
+**Message flow (claude-cli mode):** Feishu message → `WorkAgent.handleFeishuMessageCLI()` → store to Memory (`conv:{channelId}:{ts}:{role}`) → index to QMD (fire-and-forget) → GroupContextBuilder.buildContext() (inject recent + semantic-retrieved history) → ClaudeCLIServer.sendMessage() (with `--resume` session) → store assistant reply → reply via FeishuClient.
+
+**Message flow (standard mode):** Feishu message → `WorkAgent.handleFeishuMessage()` → SessionManager (get/create session, add message) → Memory (store short-term) → build context from history + memory → LLMClient.chat() → reply via FeishuClient.
 
 **Configuration:** `config.json` (see `config.example.json`). Loaded at startup and merged with defaults from `createDefaultConfig()`. Types defined in `src/types/index.ts`.
+
+## QMD Integration
+
+QMD (`@tobilu/qmd` v2.0.1) provides hybrid retrieval (BM25 + vector + LLM reranking), fully local with built-in embedding model, no external API needed. Binary at `/opt/homebrew/bin/qmd`.
+
+- **QMDStore** (`src/memory/QMDStore.ts`) wraps the SDK's `createStore` API
+- Messages are indexed as markdown documents with frontmatter (`channelId`, `role`, `timestamp`)
+- Search supports channel filtering, topK, and minScore threshold (default 0.25)
+- Config in `config.json` under `qmd: { enabled, dbPath, collectionName, minScore }`
+- Data stored in `./data/qmd/` (SQLite-backed by QMD)
+
+## Context Injection
+
+GroupContextBuilder injects historical conversation context into **both group and private chats** (no chatType restriction). The context is prepended to the user message before sending to the LLM.
+
+- **Recent messages**: last N messages within `recentWindowMinutes` (default 30min, max 20 messages)
+- **Older messages**: QMD semantic search (preferred) → keyword matching (fallback) → LLM compression (optional)
+- Context format: `[历史摘要]` section + `[近期历史消息]` section
+
+## Session Persistence (Cold Start)
+
+ClaudeCLIServer persists `channelId → sessionId` mappings to `cli-sessions.json` so that `--resume` works across agent restarts. On startup:
+1. Memory loads from `data/memory/longterm.json`
+2. QMDStore connects to SQLite index
+3. ClaudeCLIServer restores session map from disk
+4. Cold-start logs report counts: Memory entries, restored sessions, QMD readiness
 
 ## Code Conventions
 
