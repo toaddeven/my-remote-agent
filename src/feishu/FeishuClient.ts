@@ -2,7 +2,7 @@
 // 飞书集成 - 长连接模式 (WSClient)
 // 支持文本、图片、文件、视频、音频消息的接收与发送
 import { Client, WSClient, EventDispatcher } from '@larksuiteoapi/node-sdk';
-import { FeishuConfig } from '../types/index.js';
+import { FeishuConfig, FeishuAccountConfig } from '../types/index.js';
 import { logger } from '../utils/index.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -322,9 +322,118 @@ export class FeishuClient {
     return resp?.data?.message_id || '';
   }
 
+  // 获取账号标识
+  getAccountId(): string {
+    return this.config.appId;
+  }
+
   // 关闭连接
   close(): void {
     this.wsClient.close();
     logger.info('Feishu WebSocket closed');
+  }
+}
+
+// 多账号飞书客户端 — 管理多个 FeishuClient 实例
+export class FeishuMultiClient {
+  private clients: FeishuClient[] = [];
+  private messageHandler?: MessageHandler;
+
+  constructor(config: FeishuConfig) {
+    // 收集所有账号配置
+    const accounts: FeishuAccountConfig[] = [];
+
+    // 主账号（向后兼容）
+    if (config.appId && config.appSecret) {
+      accounts.push({
+        id: 'main',
+        appId: config.appId,
+        appSecret: config.appSecret,
+        verificationToken: config.verificationToken,
+        encryptKey: config.encryptKey,
+      });
+    }
+
+    // 额外账号
+    if (config.accounts) {
+      for (const acc of config.accounts) {
+        // 跳过与主账号重复的
+        if (accounts.some(a => a.appId === acc.appId)) continue;
+        accounts.push(acc);
+      }
+    }
+
+    // 为每个账号创建客户端
+    for (const acc of accounts) {
+      const client = new FeishuClient({
+        enabled: config.enabled,
+        appId: acc.appId,
+        appSecret: acc.appSecret,
+        verificationToken: acc.verificationToken,
+        encryptKey: acc.encryptKey,
+        proxy: config.proxy,
+      });
+      this.clients.push(client);
+      logger.info(`Feishu account registered: ${acc.id || acc.appId}`);
+    }
+
+    logger.info(`FeishuMultiClient initialized with ${this.clients.length} account(s)`);
+  }
+
+  // 设置消息处理回调（所有账号共享）
+  onMessage(handler: MessageHandler): void {
+    this.messageHandler = handler;
+    for (const client of this.clients) {
+      client.onMessage(handler);
+    }
+  }
+
+  // 启动所有连接
+  async start(): Promise<void> {
+    await Promise.all(this.clients.map(c => c.start()));
+    logger.info(`All ${this.clients.length} Feishu connections started`);
+  }
+
+  // 回复消息（任一客户端均可回复，使用第一个）
+  async replyMessage(messageId: string, content: string): Promise<string> {
+    // 飞书回复 API 不区分账号，用第一个客户端即可
+    if (this.clients.length === 0) throw new Error('No Feishu client available');
+    return this.clients[0].replyMessage(messageId, content);
+  }
+
+  // 发送消息（使用第一个客户端）
+  async sendMessage(receiveId: string, content: string, receiveIdType?: string): Promise<string> {
+    if (this.clients.length === 0) throw new Error('No Feishu client available');
+    return this.clients[0].sendMessage(receiveId, content, receiveIdType);
+  }
+
+  // 发送图片
+  async sendImage(receiveId: string, imagePath: string, receiveIdType?: string): Promise<string> {
+    if (this.clients.length === 0) throw new Error('No Feishu client available');
+    return this.clients[0].sendImage(receiveId, imagePath, receiveIdType);
+  }
+
+  // 发送文件
+  async sendFile(receiveId: string, filePath: string, receiveIdType?: string): Promise<string> {
+    if (this.clients.length === 0) throw new Error('No Feishu client available');
+    return this.clients[0].sendFile(receiveId, filePath, receiveIdType);
+  }
+
+  // 发送卡片
+  async sendCard(receiveId: string, cardContent: object, receiveIdType: string = 'open_id'): Promise<string> {
+    if (this.clients.length === 0) throw new Error('No Feishu client available');
+    return this.clients[0].sendCard(receiveId, cardContent, receiveIdType);
+  }
+
+  // 获取所有客户端
+  getClients(): FeishuClient[] {
+    return this.clients;
+  }
+
+  // 关闭所有连接
+  close(): void {
+    for (const client of this.clients) {
+      client.close();
+    }
   }
 }

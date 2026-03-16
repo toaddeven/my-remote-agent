@@ -6,7 +6,7 @@ import { Memory } from './memory/Memory.js';
 import { CronScheduler } from './cron/CronScheduler.js';
 import { Heartbeat } from './heartbeat/Heartbeat.js';
 import { LLMClient, ChatOptions } from './llm/LLMClient.js';
-import { FeishuClient, FeishuMessage } from './feishu/FeishuClient.js';
+import { FeishuClient, FeishuMultiClient, FeishuMessage } from './feishu/FeishuClient.js';
 import { Autostart } from './autostart/Autostart.js';
 import { SubAgentManager } from './subagent/index.js';
 import { Sandbox, createDefaultSandboxConfig } from './sandbox/index.js';
@@ -27,7 +27,7 @@ export class WorkAgent {
   private cronScheduler: CronScheduler;
   private heartbeat: Heartbeat;
   private llmClient: LLMClient;
-  private feishuClient: FeishuClient;
+  private feishuClient: FeishuMultiClient;
   private autostart: Autostart;
   
   // 新增模块
@@ -60,7 +60,7 @@ export class WorkAgent {
     this.cronScheduler = new CronScheduler();
     this.heartbeat = new Heartbeat(config.heartbeat);
     this.llmClient = new LLMClient(config.llm);
-    this.feishuClient = new FeishuClient(config.feishu);
+    this.feishuClient = new FeishuMultiClient(config.feishu);
     this.autostart = new Autostart(config.autostart || { enabled: false, platform: 'auto' });
 
     // 初始化子 Agent 管理器
@@ -425,8 +425,8 @@ export class WorkAgent {
     return this.llmClient;
   }
 
-  // 获取飞书客户端
-  getFeishuClient(): FeishuClient {
+  // 获取飞书客户端（多账号）
+  getFeishuClient(): FeishuMultiClient {
     return this.feishuClient;
   }
 

@@ -80,13 +80,23 @@ export interface LLMConfig {
   cliFlags?: string[];     // 额外 CLI 参数
 }
 
-export interface FeishuConfig {
-  proxy?: string;
-  enabled: boolean;
+// 单个飞书账号配置
+export interface FeishuAccountConfig {
+  id?: string;              // 账号标识（可选，用于日志区分）
   appId: string;
   appSecret: string;
   verificationToken?: string;
   encryptKey?: string;
+}
+
+export interface FeishuConfig {
+  proxy?: string;
+  enabled: boolean;
+  appId: string;            // 主账号（向后兼容）
+  appSecret: string;
+  verificationToken?: string;
+  encryptKey?: string;
+  accounts?: FeishuAccountConfig[];  // 多账号配置
 }
 
 export interface Config {
